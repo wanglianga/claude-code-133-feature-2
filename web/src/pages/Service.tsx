@@ -4,6 +4,7 @@ import {
 } from 'antd';
 import { api, fen, TICKET_TYPE } from '../api';
 import { useApi } from '../hooks';
+import TransferPlanCard from '../components/TransferPlanCard';
 
 const FAULT_LABEL: Record<string, string> = {
   visitor: '游客自身', storm: '暴雨停运', vehicle: '车辆故障', schedule: '调度延误', other: '其他',
@@ -24,6 +25,23 @@ export default function ServicePage() {
 
   const pending = wb?.pendingRefunds || [];
   const escalated = wb?.escalatedRefunds || [];
+  const transferPlans = wb?.transferPlans || [];
+
+  const journeyModal = (r: any) => Modal.info({
+    title: `完整行程变化 · ${r.ticket?.code}（${r.ticket?.visitorName}）`,
+    width: 720,
+    content: (
+      <div className="timeline-box" style={{ marginTop: 8 }}>
+        <Typography.Paragraph type="secondary">
+          客服退票处理依据：游客误上反方向后的方案、接受情况、实际额外等待与各角色处理记录如下。
+        </Typography.Paragraph>
+        {(r.transfers || []).map((p: any) => (
+          <TransferPlanCard key={p.id} plan={p} role="service" defaultOpen />
+        ))}
+        {!(r.transfers || []).length && <Empty description="该票无换乘记录" />}
+      </div>
+    ),
+  });
 
   const refundCols = (mode: 'agent' | 'supervisor') => [
     { title: '退票单', dataIndex: 'code', width: 150 },
@@ -39,6 +57,14 @@ export default function ServicePage() {
     { title: '金额', dataIndex: 'amount', width: 100, render: (n: number) => <b>{fen(n)}</b> },
     { title: '原因', key: 'r', render: (_: any, r: any) =>
       <Space direction="vertical" size={0}><span>{r.reason}</span><Tag>{FAULT_LABEL[r.faultTag]}</Tag></Space> },
+    {
+      title: '误乘行程变化', key: 'journey', width: 120,
+      render: (_: any, r: any) => (r.transfers || []).length
+        ? <Button size="small" type="link" onClick={() => journeyModal(r)}>
+            <Badge status="warning" text={`查看 ${r.transfers.length} 条`} />
+          </Button>
+        : <span className="muted">—</span>,
+    },
     { title: '状态', dataIndex: 'status', width: 110,
       render: (s: string) => <Tag color={REFUND_STATUS[s]?.color}>{REFUND_STATUS[s]?.text}</Tag> },
     {
@@ -88,6 +114,16 @@ export default function ServicePage() {
             key: 'incidents',
             label: <Badge count={openIncidents.length} size="small">事件协同（票/班车）</Badge>,
             children: <IncidentTable incidents={openIncidents} refresh={refresh} />,
+          },
+          {
+            key: 'transfers',
+            label: <Badge count={transferPlans.length} size="small">误乘换乘跟进</Badge>,
+            children: transferPlans.length
+              ? transferPlans.map((p: any) => (
+                  <TransferPlanCard key={p.id} plan={p} role="service" onChanged={refresh}
+                    defaultOpen={['proposed', 'accepted'].includes(p.status)} />
+                ))
+              : <Empty description="暂无进行中的误乘换乘方案" />,
           },
         ]}
       />

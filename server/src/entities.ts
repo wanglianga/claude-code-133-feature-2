@@ -243,6 +243,56 @@ export class GeofenceEvent {
   @Column() at: string;
 }
 
+/* ---------------- 误上反方向换乘方案 ---------------- */
+
+export type TransferStatus = 'proposed' | 'accepted' | 'declined' | 'completed' | 'archived';
+
+export interface TransferStep {
+  seq: number;
+  title: string;
+  detail: string;
+}
+
+@Entity('wrong_boarding_transfers')
+export class WrongBoardingTransfer {
+  @PrimaryGeneratedColumn() id: number;
+  @Column() code: string;            // WB20260925-001
+  @Index() @Column() ticketId: number;
+  @Column() incidentId: number;      // 串联误乘事件（票/班车时间线）
+  @Column() wrongTripId: number;     // 误乘上的反方向班次
+  @Column() vehicleId: number;
+  @Column() driverId: number;
+  @Column() routeId: number;
+  @Column() boardStationId: number;  // 误上车站
+  @Column() currentStationId: number;// 车辆当前位置（随电子围栏更新）
+  @Column() alightStationId: number; // 建议下车站（本班下一站）
+  @Column() destStationId: number;   // 票面终点站
+  @Column({ nullable: true }) transferTripId: number | null; // 调度锁定的接驳班次
+  @Column({ default: 'single' }) ticketType: string;
+  @Column('int', { default: 1 }) partySize: number;
+  @Column({ default: false }) needWheelchair: boolean;
+  @Column({ default: false }) priority: boolean;
+  @Column({ default: '' }) remainingRouteText: string; // 剩余路线人读描述
+  @Column('simple-json') planSteps: TransferStep[];
+  @Column({ default: 'proposed' }) status: TransferStatus;
+  @Column('int', { default: 0 }) extraWaitMinutes: number;       // 预计额外等待
+  @Column('int', { default: 0 }) actualExtraWaitMinutes: number; // 实际额外等待
+  @Column({ default: false }) causedExtraWait: boolean;          // 是否产生额外等待
+  @Column({ default: '' }) visitorNote: string;
+  @Column({ default: '' }) staffNote: string;
+  @Column({ default: '' }) dispatchNote: string;
+  @Column({ nullable: true }) remindedDriverAt: string | null;
+  @Column({ nullable: true }) remindedNextStationAt: string | null;
+  @Column({ nullable: true }) driverAckAt: string | null;
+  @Column({ nullable: true }) nextStationAckAt: string | null;
+  @Column({ nullable: true }) acceptedAt: string | null;
+  @Column({ nullable: true }) declinedAt: string | null;
+  @Column({ nullable: true }) alightArrivedAt: string | null; // 车辆抵达下车站
+  @Column({ nullable: true }) completedAt: string | null;
+  @Column({ nullable: true }) archivedAt: string | null;
+  @Column() createdAt: string;
+}
+
 /* ---------------- 团队包车 ---------------- */
 
 @Entity('charter_orders')
@@ -268,5 +318,6 @@ export class CharterOrder {
 
 export const ALL_ENTITIES = [
   RouteLine, Station, Vehicle, Driver, SafetyCheck, Trip, Ticket, QueueEntry,
-  Incident, Refund, Broadcast, Weather, RoadControl, GeofenceEvent, CharterOrder,
+  Incident, Refund, Broadcast, Weather, RoadControl, GeofenceEvent,
+  WrongBoardingTransfer, CharterOrder,
 ];

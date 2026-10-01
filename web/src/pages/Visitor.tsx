@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import { api, fen, TICKET_TYPE, TICKET_STATUS } from '../api';
 import { useAction, useApi } from '../hooks';
+import TransferPlanCard from '../components/TransferPlanCard';
 
 export default function VisitorPage() {
   const { data: routesData } = useApi<any[]>('/routes');
@@ -143,9 +144,10 @@ function RefundForm({ setValues }: { setValues?: (v: any) => void }) {
 }
 
 function TicketDetail({ detail, onRefund, onChanged }: { detail: any; onRefund: () => void; onChanged: () => void }) {
-  const { ticket, origin, dest, incidents, typeLabel } = detail;
+  const { ticket, origin, dest, incidents, transfers, typeLabel } = detail;
   const st = TICKET_STATUS[ticket.status];
   const canRefund = ['valid', 'queued'].includes(ticket.status);
+  const activeTransfers = (transfers || []).filter((p: any) => p.status !== 'archived');
 
   const refund = () => {
     let values: any = { reason: '游客个人原因申请退票', faultTag: 'visitor' };
@@ -177,6 +179,17 @@ function TicketDetail({ detail, onRefund, onChanged }: { detail: any; onRefund: 
           <Typography.Text type="secondary"> ｜路线：{ticket.plannedRoute}</Typography.Text>
         </Descriptions.Item>
       </Descriptions>
+
+      {activeTransfers.length > 0 && (
+        <div style={{ margin: '12px 0' }}>
+          <Divider orientation="left" style={{ fontSize: 13 }}>误上反方向 · 换乘方案（行程变化同步）</Divider>
+          {activeTransfers.map((p: any) => (
+            <TransferPlanCard key={p.id} plan={p} role="visitor" onChanged={onChanged}
+              defaultOpen={['proposed', 'accepted'].includes(p.status)} />
+          ))}
+        </div>
+      )}
+
       <Divider orientation="left" style={{ fontSize: 13 }}>事件时间线（游客 / 站务 / 司机 / 调度 / 客服 / 财务）</Divider>
       <Timeline
         items={incidents.flatMap((inc: any) => {

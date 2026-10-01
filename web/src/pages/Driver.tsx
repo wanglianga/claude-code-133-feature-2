@@ -6,6 +6,7 @@ import {
 import { SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
 import { api, TRIP_STATUS } from '../api';
 import { useApi } from '../hooks';
+import TransferPlanCard from '../components/TransferPlanCard';
 
 const CHECK_ITEMS = [
   { key: 'brake', label: '刹车系统' },
@@ -117,7 +118,7 @@ export default function DriverPage() {
       </Card>
 
       <Card title="我的当前班次">
-        {activeTrip ? <TripPanel trip={activeTrip} onEvent={refresh} /> : <Empty description="当前没有已派班次，请等待调度派班" />}
+        {activeTrip ? <TripPanel trip={activeTrip} onEvent={refresh} reloadKey={tick} /> : <Empty description="当前没有已派班次，请等待调度派班" />}
       </Card>
     </Space>
   );
@@ -149,15 +150,28 @@ function SafetyCheck({ driverId, vehicleId, onDone }: { driverId: number; vehicl
   );
 }
 
-function TripPanel({ trip, onEvent }: { trip: any; onEvent: () => void }) {
+function TripPanel({ trip, onEvent, reloadKey = 0 }: { trip: any; onEvent: () => void; reloadKey?: number }) {
   const { data: routes } = useApi<any[]>('/routes');
   const route = (routes || []).find(r => r.stations.some((s: any) => s.name === trip.originName));
   const routeStations: any[] = route ? route.stations : [];
+  const { data: transfers } = useApi<any[]>('/transfers/plans', [reloadKey]);
+  const myTransfers = (transfers || []).filter((p: any) =>
+    p.wrongTripId === trip.id && ['proposed', 'accepted'].includes(p.status));
 
   return (
     <Space direction="vertical" style={{ width: '100%' }}>
       {trip.status === 'delayed' && <Alert type="warning" showIcon message={`本班延误：${trip.delayReason}`} />}
       {trip.status === 'suspended' && <Alert type="error" showIcon message={`本班已停运：${trip.suspendReason}`} />}
+
+      {myTransfers.length > 0 && (
+        <Alert type="warning" showIcon
+          style={{ border: '1px solid #fa8c16' }}
+          message={<b>车上有误上反方向游客 {myTransfers.length} 组：请安抚并留在车上，到达下一站后交由站务接应，不要让游客折返或重新排队</b>}
+          description={myTransfers.map(p => (
+            <TransferPlanCard key={p.id} plan={p} role="driver"
+              onChanged={onEvent} defaultOpen />
+          ))} />
+      )}
       <Descriptions bordered size="small" column={3}>
         <Descriptions.Item label="班次">{trip.code}</Descriptions.Item>
         <Descriptions.Item label="状态"><Tag color={TRIP_STATUS[trip.status]?.color}>{TRIP_STATUS[trip.status]?.text}</Tag></Descriptions.Item>
@@ -182,6 +196,11 @@ function TripPanel({ trip, onEvent }: { trip: any; onEvent: () => void }) {
               Modal.warning({
                 title: '车辆满载，已自动跳站',
                 content: `本站 ${r.waitingGroups} 组游客未能上车，事件已同步调度加车，站台已自动广播`,
+              });
+            } else if (r.transferArrivals > 0) {
+              Modal.warning({
+                title: '到站：有误上反方向游客需移交',
+                content: `本站工作人员已收到接应提醒，请协助 ${r.transferArrivals} 组游客下车换乘，勿让其重新排队。`,
               });
             } else {
               message.success(`已到站：余 ${r.seatsLeft} 座，轮椅位 ${r.wheelchairLeft}，站台 ${r.waitingPeople || 0} 人等候`);

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Refund, Ticket, Incident, Trip } from '../entities';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransfersService } from '../transfers/transfers.service';
 import { now } from '../common';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class ServiceService {
     @InjectRepository(Incident) private readonly incidents: Repository<Incident>,
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
     private readonly incidentSvc: IncidentsService,
+    private readonly transferSvc: TransfersService,
   ) {}
 
   /** 客服工作台：待办退票 + 开放事件 */
@@ -27,14 +29,31 @@ export class ServiceService {
     const ticketRows = await this.tickets.find();
     const tMap = new Map(ticketRows.map(t => [t.id, t]));
     const withTicket = (r: Refund) => ({ ...r, ticket: tMap.get(r.ticketId) });
+
+    // 退票单附带完整行程变化（误上反方向换乘记录，作为责任判定依据）
+    const [pendingWithJourney, escalatedWithJourney, transferPlans] = await Promise.all([
+      Promise.all(pendingRefunds.map(async r => ({
+        ...withTicket(r),
+        transfers: await this.transferSvc.ticketJourney(r.ticketId),
+      }))),
+      Promise.all(escalated.map(async r => ({
+        ...withTicket(r),
+        transfers: await this.transferSvc.ticketJourney(r.ticketId),
+      }))),
+      this.transferSvc.list(),
+    ]);
+    const activeTransfers = transferPlans.filter(p => ['proposed', 'accepted', 'declined', 'completed'].includes(p.status));
+
     return {
-      pendingRefunds: pendingRefunds.map(withTicket),
-      escalatedRefunds: escalated.map(withTicket),
+      pendingRefunds: pendingWithJourney,
+      escalatedRefunds: escalatedWithJourney,
       openIncidents,
+      transferPlans: activeTransfers,
       counts: {
         pendingRefund: pendingRefunds.length,
         escalated: escalated.length,
         openIncident: openIncidents.length,
+        activeTransfer: activeTransfers.length,
       },
     };
   }

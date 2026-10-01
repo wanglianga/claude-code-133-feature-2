@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { api, TRIP_STATUS } from '../api';
 import { useApi } from '../hooks';
+import TransferPlanCard from '../components/TransferPlanCard';
 
 export default function DispatchPage() {
   const [tick, setTick] = useState(0);
@@ -58,6 +59,16 @@ export default function DispatchPage() {
                 icon={<WarningOutlined />} message={s.text} />
             ))}
           </Space>
+        </Card>
+      )}
+
+      {(dash?.transferPlans || []).length > 0 && (
+        <Card title={<Space><span style={{ color: '#d46b08' }}>🔁 误上反方向 · 换乘协同（司机/下一站已自动提醒，游客无需重新排队）</span>
+          <Badge count={dash.transferPlans.length} color="#fa8c16" /></Space>}>
+          {dash.transferPlans.map((p: any) => (
+            <TransferPlanCard key={p.id} plan={p} role="dispatch" trips={dash.trips} onChanged={refresh}
+              defaultOpen={['proposed'].includes(p.status)} />
+          ))}
         </Card>
       )}
 

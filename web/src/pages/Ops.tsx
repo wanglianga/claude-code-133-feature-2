@@ -24,6 +24,24 @@ export default function OpsPage() {
         <div className="stat-card"><div className="l">未闭环事件</div><div className="v">{k.openIncidents}</div></div>
       </div>
 
+      {r.transferStats && r.transferStats.total > 0 && (
+        <Card title={<Space><span>🔁 误上反方向换乘治理</span>
+          <Tag color="orange">{r.transferStats.total} 起</Tag></Space>}>
+          <Row gutter={16}>
+            <Col xs={12} md={6}><Statistic title="游客接受方案" value={r.transferStats.accepted} suffix={`/ ${r.transferStats.total}`} /></Col>
+            <Col xs={12} md={6}><Statistic title="游客拒绝" value={r.transferStats.declined} /></Col>
+            <Col xs={12} md={6}><Statistic title="产生额外等待" value={r.transferStats.causedExtraWait}
+              suffix="起" valueStyle={{ color: r.transferStats.causedExtraWait ? '#cf1322' : undefined }} /></Col>
+            <Col xs={12} md={6}><Statistic title="平均/最长额外等待"
+              value={r.transferStats.avgExtraWaitMinutes} suffix={`/ ${r.transferStats.maxExtraWaitMinutes} 分`} /></Col>
+            <Col xs={12} md={6} style={{ marginTop: 12 }}><Statistic title="已归档确认" value={r.transferStats.archived} /></Col>
+            <Col xs={12} md={6} style={{ marginTop: 12 }}><Statistic title="进行中" value={r.transferStats.open} /></Col>
+            <Col xs={12} md={6} style={{ marginTop: 12 }}><Statistic title="司机提醒确认率" value={r.transferStats.driverAckRate} suffix="%" /></Col>
+            <Col xs={12} md={6} style={{ marginTop: 12 }}><Statistic title="下一站提醒确认率" value={r.transferStats.stationAckRate} suffix="%" /></Col>
+          </Row>
+        </Card>
+      )}
+
       <Row gutter={16}>
         <Col xs={24} lg={12}>
           <Card title="站点等待时长（热门站治理依据）">

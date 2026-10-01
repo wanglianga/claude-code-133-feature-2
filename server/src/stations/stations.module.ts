@@ -7,6 +7,7 @@ import {
 import { StationsService } from './stations.service';
 import { StationsController } from './stations.controller';
 import { IncidentsModule } from '../incidents/incidents.module';
+import { TransfersModule } from '../transfers/transfers.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { IncidentsModule } from '../incidents/incidents.module';
       Broadcast, RoadControl, GeofenceEvent, Incident,
     ]),
     IncidentsModule,
+    TransfersModule,
   ],
   providers: [StationsService],
   controllers: [StationsController],

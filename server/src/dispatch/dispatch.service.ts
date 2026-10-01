@@ -6,6 +6,7 @@ import {
   RoadControl, GeofenceEvent, SafetyCheck, CharterOrder,
 } from '../entities';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransfersService } from '../transfers/transfers.service';
 import { now, seqCode, waitSeconds } from '../common';
 
 const MIN_BATTERY = 20;       // 低于 20% 禁止发车
@@ -30,6 +31,7 @@ export class DispatchService {
     @InjectRepository(SafetyCheck) private readonly checks: Repository<SafetyCheck>,
     @InjectRepository(CharterOrder) private readonly charters: Repository<CharterOrder>,
     private readonly incidentSvc: IncidentsService,
+    private readonly transferSvc: TransfersService,
   ) {}
 
   /* ================= 调度看板 ================= */
@@ -64,6 +66,9 @@ export class DispatchService {
 
     const suggestions = this.buildSuggestions(vehicleCards, drivers, stationCards, weatherRow[0], controls);
 
+    const transferPlans = await this.transferSvc.list();
+    const activeTransfers = transferPlans.filter(p => ['proposed', 'accepted', 'completed'].includes(p.status));
+
     return {
       weather: weatherRow[0] || null,
       controls,
@@ -73,6 +78,7 @@ export class DispatchService {
       trips: await this.decorateTrips(trips),
       charters,
       suggestions,
+      transferPlans: activeTransfers,
     };
   }
 
@@ -106,9 +112,14 @@ export class DispatchService {
       out.push({ level: 'critical', text: `${weather.warning}，全线暂停发车，在班车就近折返/停运` });
     }
     for (const c of controls) {
-      out.push({ level: c.reason.includes('封闭') ? 'critical' : 'warn', text: `道路管制：${c.segment}（${c.reason}），派班需绕行或改区间` });
+      out.push({ level: this.isClosedControl(c.reason) ? 'critical' : 'warn', text: `道路管制：${c.segment}（${c.reason}），派班需绕行或改区间` });
     }
     return out;
+  }
+
+  /** “道路封闭/封路”才算阻断；“未封闭”仅减速提醒 */
+  private isClosedControl(reason: string): boolean {
+    return /(封闭|封路)/.test(reason) && !/未\s*封闭/.test(reason);
   }
 
   private async decorateTrips(trips: Trip[]) {
@@ -314,7 +325,8 @@ export class DispatchService {
 
     const activeControls = await this.controls.find({ where: { status: 'active' } });
     const blockingControl = activeControls.find(c =>
-      c.reason.includes('封闭') && (!c.stationId || c.stationId === origin.id || c.stationId === dest.id));
+      this.isClosedControl(c.reason)
+      && (!c.stationId || c.stationId === origin.id || c.stationId === dest.id));
     if (blockingControl) blockers.push(`道路管制：${blockingControl.segment} 道路封闭`);
 
     const [weatherRow] = await this.weatherRepo.find({ order: { id: 'DESC' }, take: 1 });
@@ -401,6 +413,9 @@ export class DispatchService {
       lat: station.lat, lng: station.lng, at: now(),
     }));
 
+    // 误上反方向：车辆到达方案中的下车站时，自动提醒下一站接应
+    const transferArrivals = await this.transferSvc.onVehicleArrive(trip.id, stationId);
+
     const seatsLeft = vehicle.capacity - trip.seatsSold;
     const waiting = await this.queue.find({
       where: { stationId, status: In(['waiting', 'called']) },
@@ -428,7 +443,7 @@ export class DispatchService {
         raisedByRole: 'system', ownerRole: 'dispatch',
         firstNote: `电子围栏识别到站，座位余量 0，自动登记跳站；${waiting.length} 组游客转回排队`,
       });
-      return { arrived: true, skipped: true, seatsLeft: 0, waitingGroups: waiting.length };
+      return { arrived: true, skipped: true, seatsLeft: 0, waitingGroups: waiting.length, transferArrivals };
     }
 
     // 非满载：把之前跳站状态仍在本站的游客转回等候
@@ -442,6 +457,7 @@ export class DispatchService {
       wheelchairLeft,
       waitingGroups: waiting.length,
       waitingPeople: waiting.reduce((a, e) => a + e.partySize, 0),
+      transferArrivals,
     };
   }
 
@@ -497,9 +513,22 @@ export class DispatchService {
     }
     await this.drivers.save(d);
 
-    // 车票核销
-    const onboard = await this.tickets.find({ where: { tripId, status: 'boarded' } });
-    for (const t of onboard) { t.status = 'used'; await this.tickets.save(t); }
+    // 车票核销（误上反方向且换乘方案未归档的票不在误乘班核销，随接驳班完成）
+    const onboardAll = await this.tickets.find({ where: { tripId, status: 'boarded' } });
+    const onboard = [];
+    for (const tk of onboardAll) {
+      const plans = await this.transferSvc.ticketJourney(tk.id);
+      const openPlan = plans.find(p => ['proposed', 'accepted', 'completed'].includes(p.status));
+      if (openPlan) {
+        // 票将由接驳班核销；若接驳班已锁定则保持关联，否则保持已检票待客服/接驳处理
+        tk.status = 'boarded';
+        await this.tickets.save(tk);
+        continue;
+      }
+      tk.status = 'used';
+      await this.tickets.save(tk);
+      onboard.push(tk);
+    }
     const boardedEntries = await this.queue.find({ where: { tripId, status: 'boarded' } });
     // queue 已在检票时记录 waitSeconds
 

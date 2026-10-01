@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { api, TICKET_TYPE, TRIP_STATUS, waitText } from '../api';
 import { useApi } from '../hooks';
+import TransferPlanCard from '../components/TransferPlanCard';
 
 export default function StaffPage() {
   const { data: overview } = useApi<any>('/overview');
@@ -93,8 +94,16 @@ export default function StaffPage() {
                   title: '确认强制放行反方向乘车？',
                   content: '系统将生成误乘事件并通知调度安排返程衔接',
                   onOk: async () => {
-                    await api.post(`/queue/${r.id}/board`, { tripId: t.id, force: true });
-                    message.success('已强制放行'); refresh();
+                    const res = await api.post(`/queue/${r.id}/board`, { tripId: t.id, force: true });
+                    if (res.wrongBoardingPlan) {
+                      Modal.success({
+                        title: '已强制放行 · 换乘方案已生成',
+                        content: `平台已通知司机与下一站「${res.wrongBoardingPlan.alightStationName}」接应，游客无需重新排队；游客端将收到方案并可确认。`,
+                      });
+                    } else {
+                      message.success('已强制放行');
+                    }
+                    refresh();
                   },
                 });
               }}>强制放行</Button>
@@ -179,6 +188,17 @@ export default function StaffPage() {
           )}
           {board.flowLimitPerHour > 0 && (
             <Alert type="info" showIcon message={`本站景点限流 ${board.flowLimitPerHour} 人/小时，注意控制放行节奏`} />
+          )}
+
+          {(board.pickupAlerts || []).length > 0 && (
+            <Card style={{ borderColor: '#fa8c16' }}
+              title={<Space><span style={{ color: '#d46b08' }}>🚏 下一站换乘接应提醒（误上反方向游客将随对向班车到达本站，请勿让其重新排队）</span>
+                <Badge count={board.pickupAlerts.length} color="#fa8c16" /></Space>}>
+              {board.pickupAlerts.map((p: any) => (
+                <TransferPlanCard key={p.id} plan={p} role="staff" onChanged={refresh}
+                  defaultOpen={['proposed'].includes(p.status) && !p.nextStationAckAt} />
+              ))}
+            </Card>
           )}
 
           <Card title="游客扫码入队" extra={<span className="muted">仅本站票面始发站可入队，系统自动校验方向</span>}>

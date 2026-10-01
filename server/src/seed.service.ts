@@ -5,6 +5,7 @@ import {
   RouteLine, Station, Vehicle, Driver, Weather, Ticket, QueueEntry,
   RoadControl, Trip,
 } from './entities';
+import { TransfersService } from './transfers/transfers.service';
 import { now, seqCode, ticketPrice } from './common';
 
 @Injectable()
@@ -19,6 +20,7 @@ export class SeedService implements OnApplicationBootstrap {
     @InjectRepository(QueueEntry) private readonly queue: Repository<QueueEntry>,
     @InjectRepository(RoadControl) private readonly controls: Repository<RoadControl>,
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
+    private readonly transferSvc: TransfersService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -215,7 +217,51 @@ export class SeedService implements OnApplicationBootstrap {
     t6.status = 'queued';
     await this.tickets.save(t6);
 
+    /* ---- 一列下行班车（V01 + 王建国，环山线 玻璃栈道→东门），用于误乘反方向演示 ---- */
+    const backTrip = await this.trips.save(this.trips.create({
+      code: seqCode('TR'),
+      routeId: loop.id, vehicleId: vehicles[0].id, driverId: drivers[0].id,
+      direction: 'backward', status: 'running',
+      originStationId: loopStations[3].id, destStationId: loopStations[0].id,
+      departAt: now(), seatsTotal: 14, seatsSold: 2, wheelchairHeld: 0,
+      boardedCount: 1, skippedStations: [],
+    }));
+    vehicles[0].status = 'running';
+    vehicles[0].currentTripId = backTrip.id;
+    vehicles[0].currentStationId = loopStations[1].id;
+    vehicles[0].lat = loopStations[1].lat;
+    vehicles[0].lng = loopStations[1].lng;
+    await this.vehicles.save(vehicles[0]);
+    drivers[0].status = 'driving';
+    drivers[0].currentVehicleId = vehicles[0].id;
+    await this.drivers.save(drivers[0]);
+
+    // 误上反方向的游客：本应在百花园乘上行去玻璃栈道，却上了下行班车
+    const t7 = await mkTicket({
+      visitorName: '郑洁', type: 'single', partySize: 2,
+      originStationId: loopStations[1].id, destStationId: loopStations[3].id,
+      expectedDirection: 'forward',
+      plannedRoute: '百花园 → 山顶观景台 → 玻璃栈道',
+      status: 'boarded', tripId: backTrip.id,
+      price: ticketPrice('single', 2),
+    });
+    await this.queue.save(this.queue.create({
+      stationId: loopStations[1].id, ticketId: t7.id, partySize: 2,
+      priority: false, expectedDirection: 'forward',
+      status: 'boarded', enqueueAt: new Date(Date.now() - 4 * 60000).toISOString(),
+      boardAt: now(), tripId: backTrip.id, waitSeconds: 4 * 60,
+    }));
+    // 平台按票种/当前位置/剩余路线生成换乘方案（下一站东门枢纽接应，对向 TR…-001 接驳）
+    const seedPlan = await this.transferSvc.createPlan({
+      ticketId: t7.id,
+      wrongTripId: backTrip.id,
+      boardStationId: loopStations[1].id,
+      currentStationId: loopStations[1].id,
+      raisedByRole: 'staff',
+    });
+    await this.transferSvc.driverAck(seedPlan.id);
+
     // eslint-disable-next-line no-console
-    console.log('[seed] 演示数据已写入：2 条线路 / 10 个站点 / 6 辆车 / 4 名司机 / 6 张票');
+    console.log('[seed] 演示数据已写入：2 条线路 / 10 个站点 / 6 辆车 / 4 名司机 / 7 张票 / 1 个误乘换乘方案');
   }
 }

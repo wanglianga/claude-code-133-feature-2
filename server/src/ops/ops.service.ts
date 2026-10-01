@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import {
-  QueueEntry, Ticket, Trip, Vehicle, Incident, Refund, Station,
+  QueueEntry, Ticket, Trip, Vehicle, Incident, Refund, Station, WrongBoardingTransfer,
 } from '../entities';
 
 @Injectable()
@@ -15,11 +15,12 @@ export class OpsService {
     @InjectRepository(Incident) private readonly incidents: Repository<Incident>,
     @InjectRepository(Refund) private readonly refunds: Repository<Refund>,
     @InjectRepository(Station) private readonly stations: Repository<Station>,
+    @InjectRepository(WrongBoardingTransfer) private readonly transfers: Repository<WrongBoardingTransfer>,
   ) {}
 
-  /** 运营复盘：站点等待 / 车辆利用率 / 投诉原因 / 退票成本 */
+  /** 运营复盘：站点等待 / 车辆利用率 / 投诉原因 / 退票成本 / 误乘换乘治理 */
   async report() {
-    const [entries, allTickets, trips, vehicles, incs, refunds, stations] = await Promise.all([
+    const [entries, allTickets, trips, vehicles, incs, refunds, stations, transferRows] = await Promise.all([
       this.queue.find(),
       this.tickets.find(),
       this.trips.find(),
@@ -27,6 +28,7 @@ export class OpsService {
       this.incidents.find(),
       this.refunds.find(),
       this.stations.find(),
+      this.transfers.find(),
     ]);
 
     /* ---- 站点等待 ---- */
@@ -130,6 +132,28 @@ export class OpsService {
       openIncidents: incs.filter(i => ['open', 'processing', 'escalated'].includes(i.status)).length,
     };
 
-    return { kpi, stationWait, vehicleUtil, complaintReasons, refundByFault: byFault };
+    /* ---- 误上反方向换乘治理 ---- */
+    const acceptedPlans = transferRows.filter(t => t.status !== 'declined');
+    const waits = acceptedPlans.map(t => t.actualExtraWaitMinutes).filter(w => w > 0);
+    const transferStats = {
+      total: transferRows.length,
+      accepted: transferRows.filter(t => !!t.acceptedAt).length,
+      declined: transferRows.filter(t => !!t.declinedAt).length,
+      archived: transferRows.filter(t => t.status === 'archived').length,
+      open: transferRows.filter(t => ['proposed', 'accepted', 'completed'].includes(t.status)).length,
+      // 仅把已完成换乘且实测等待 > 0 分钟的计入“产生额外等待”
+      causedExtraWait: transferRows.filter(t => t.actualExtraWaitMinutes > 0).length,
+      avgExtraWaitMinutes: waits.length ? Math.round(waits.reduce((a, b) => a + b, 0) / waits.length) : 0,
+      maxExtraWaitMinutes: waits.length ? Math.max(...waits) : 0,
+      driverAckRate: transferRows.length
+        ? Math.round(transferRows.filter(t => t.driverAckAt).length / transferRows.length * 100) : 0,
+      stationAckRate: transferRows.length
+        ? Math.round(transferRows.filter(t => t.nextStationAckAt).length / transferRows.length * 100) : 0,
+    };
+
+    return {
+      kpi, stationWait, vehicleUtil, complaintReasons, refundByFault: byFault,
+      transferStats,
+    };
   }
 }

@@ -59,3 +59,11 @@ export const TRIP_STATUS: Record<string, { text: string; color: string }> = {
   suspended: { text: '已停运', color: 'red' },
   delayed: { text: '延误', color: 'orange' },
 };
+
+export const TRANSFER_STATUS: Record<string, { text: string; color: string }> = {
+  proposed: { text: '待游客确认', color: 'orange' },
+  accepted: { text: '已接受·执行中', color: 'processing' },
+  declined: { text: '游客拒绝', color: 'red' },
+  completed: { text: '换乘完成·待确认', color: 'blue' },
+  archived: { text: '已归档', color: 'default' },
+};

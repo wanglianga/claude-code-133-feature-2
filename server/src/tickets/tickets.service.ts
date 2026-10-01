@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Ticket, Refund, QueueEntry, Station, Incident } from '../entities';
 import { BuyTicketDto, RefundRequestDto } from './dto';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransfersService } from '../transfers/transfers.service';
 import { now, seqCode, ticketPrice, waitSeconds } from '../common';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class TicketsService {
     @InjectRepository(QueueEntry) private readonly queue: Repository<QueueEntry>,
     @InjectRepository(Station) private readonly stations: Repository<Station>,
     private readonly incidents: IncidentsService,
+    private readonly transfers: TransfersService,
   ) {}
 
   /** 游客购票：记录入园时间、起终站、同行人数、婴儿车/老人儿童、预计路线 */
@@ -80,6 +82,7 @@ export class TicketsService {
       this.refunds.find({ where: { ticketId: id }, order: { id: 'ASC' } }),
       this.incidents.byTicketOrTrip(id, ticket.tripId || undefined),
     ]);
+    const transfers = await this.transfers.ticketJourney(id);
     const [origin, dest] = await Promise.all([
       this.stations.findOne({ where: { id: ticket.originStationId } }),
       this.stations.findOne({ where: { id: ticket.destStationId } }),
@@ -91,6 +94,7 @@ export class TicketsService {
       queueEntries,
       refunds,
       incidents: incs,
+      transfers,
       typeLabel: this.typeName(ticket.type),
       currentWaitSeconds: queueEntries.length
         ? waitSeconds(queueEntries[queueEntries.length - 1].enqueueAt)
@@ -108,8 +112,8 @@ export class TicketsService {
   async requestRefund(ticketId: number, dto: RefundRequestDto) {
     const ticket = await this.tickets.findOne({ where: { id: ticketId } });
     if (!ticket) throw new NotFoundException('车票不存在');
-    if (['boarded', 'used'].includes(ticket.status)) {
-      throw new BadRequestException('已检票上车的车票请走客服争议退票');
+    if (['boarded', 'used'].includes(ticket.status) && dto.applicantRole === 'visitor') {
+      throw new BadRequestException('已检票上车的车票请联系客服，由客服按争议/误乘场景代发起退票');
     }
     if (ticket.status === 'refund_pending') throw new BadRequestException('该票已在退票审核中');
     if (ticket.status === 'refunded') throw new BadRequestException('该票已退款');
@@ -144,13 +148,17 @@ export class TicketsService {
   }
 
   async listRefunds(status?: string) {
-    const rows = await this.refunds.find({
+    const refunds = await this.refunds.find({
       where: status ? { status: status as any } : {},
       order: { id: 'DESC' },
     });
     const tickets = await this.tickets.find();
     const ticketMap = new Map(tickets.map(t => [t.id, t]));
-    return rows.map(r => ({ ...r, ticket: ticketMap.get(r.ticketId) }));
+    return Promise.all(refunds.map(async r => ({
+      ...r,
+      ticket: ticketMap.get(r.ticketId),
+      transfers: await this.transfers.ticketJourney(r.ticketId),
+    })));
   }
 
   private typeName(t: string) {

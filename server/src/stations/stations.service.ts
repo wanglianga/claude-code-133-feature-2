@@ -6,6 +6,7 @@ import {
   Broadcast, RoadControl, Incident,
 } from '../entities';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransfersService } from '../transfers/transfers.service';
 import { now, waitSeconds } from '../common';
 
 const LONG_QUEUE_RATIO = 1.2; // 排队人数超站台容量 1.2 倍判定过长
@@ -24,6 +25,7 @@ export class StationsService {
     @InjectRepository(RoadControl) private readonly controls: Repository<RoadControl>,
     @InjectRepository(Incident) private readonly incidents: Repository<Incident>,
     private readonly incidentSvc: IncidentsService,
+    private readonly transferSvc: TransfersService,
   ) {}
 
   /* ---------------- 线路 / 站点 / 天气 ---------------- */
@@ -128,6 +130,9 @@ export class StationsService {
       where: { stationId, status: 'boarded' },
     });
 
+    // 本站相关的误上反方向换乘提醒（作为下车站接应 / 作为误上站协同）
+    const transferPlans = await this.transferSvc.list({ stationId });
+
     return {
       station,
       route,
@@ -141,6 +146,9 @@ export class StationsService {
       broadcasts,
       checkedToday,
       flowLimitPerHour: station.flowLimitPerHour,
+      transferPlans,
+      pickupAlerts: transferPlans.filter(p =>
+        p.alightStationId === stationId && ['proposed', 'accepted'].includes(p.status)),
     };
   }
 
@@ -269,15 +277,19 @@ export class StationsService {
     await this.tickets.save(ticket);
 
     if (dirMismatch && opts.force) {
-      await this.incidentSvc.create({
-        type: 'wrong_direction',
-        severity: 'critical',
-        title: `${ticket.visitorName} 确认乘上反方向班车 ${trip.code}`,
-        detail: '站务已二次确认并强制放行，需通知司机/下一站协助换乘返回',
-        ticketId: ticket.id, tripId: trip.id, stationId: entry.stationId,
-        raisedByRole: 'staff', ownerRole: 'dispatch',
-        firstNote: '站务强制放行反方向乘车，调度安排返程衔接',
+      // 误上反方向已成事实：平台按票种/当前位置/剩余路线生成换乘方案，
+      // 并自动提醒司机与下一站工作人员接应（游客无需重新排队）
+      const plan = await this.transferSvc.createPlan({
+        ticketId: ticket.id,
+        wrongTripId: trip.id,
+        boardStationId: entry.stationId,
+        currentStationId: entry.stationId,
+        raisedByRole: 'staff',
       });
+      return {
+        ok: true, entry, trip, waitSeconds: entry.waitSeconds,
+        wrongBoardingPlan: await this.transferSvc.detail(plan.id),
+      };
     }
     return { ok: true, entry, trip, waitSeconds: entry.waitSeconds };
   }
