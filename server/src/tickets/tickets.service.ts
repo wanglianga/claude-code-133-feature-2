@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Ticket, Refund, QueueEntry, Station, Incident } from '../entities';
 import { BuyTicketDto, RefundRequestDto } from './dto';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransferService } from '../transfer/transfer.service';
 import { now, seqCode, ticketPrice, waitSeconds } from '../common';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class TicketsService {
     @InjectRepository(QueueEntry) private readonly queue: Repository<QueueEntry>,
     @InjectRepository(Station) private readonly stations: Repository<Station>,
     private readonly incidents: IncidentsService,
+    private readonly transferSvc: TransferService,
   ) {}
 
   /** 游客购票：记录入园时间、起终站、同行人数、婴儿车/老人儿童、预计路线 */
@@ -75,10 +77,11 @@ export class TicketsService {
   async detail(id: number) {
     const ticket = await this.tickets.findOne({ where: { id } });
     if (!ticket) throw new NotFoundException('车票不存在');
-    const [queueEntries, refunds, incs] = await Promise.all([
+    const [queueEntries, refunds, incs, transfers] = await Promise.all([
       this.queue.find({ where: { ticketId: id }, order: { id: 'ASC' } }),
       this.refunds.find({ where: { ticketId: id }, order: { id: 'ASC' } }),
       this.incidents.byTicketOrTrip(id, ticket.tripId || undefined),
+      this.transferSvc.forTicket(id),
     ]);
     const [origin, dest] = await Promise.all([
       this.stations.findOne({ where: { id: ticket.originStationId } }),
@@ -91,6 +94,7 @@ export class TicketsService {
       queueEntries,
       refunds,
       incidents: incs,
+      transfers,
       typeLabel: this.typeName(ticket.type),
       currentWaitSeconds: queueEntries.length
         ? waitSeconds(queueEntries[queueEntries.length - 1].enqueueAt)

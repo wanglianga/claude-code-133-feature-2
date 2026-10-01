@@ -6,6 +6,7 @@ import {
   RoadControl, GeofenceEvent, SafetyCheck, CharterOrder,
 } from '../entities';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransferService } from '../transfer/transfer.service';
 import { now, seqCode, waitSeconds } from '../common';
 
 const MIN_BATTERY = 20;       // 低于 20% 禁止发车
@@ -30,6 +31,7 @@ export class DispatchService {
     @InjectRepository(SafetyCheck) private readonly checks: Repository<SafetyCheck>,
     @InjectRepository(CharterOrder) private readonly charters: Repository<CharterOrder>,
     private readonly incidentSvc: IncidentsService,
+    private readonly transferSvc: TransferService,
   ) {}
 
   /* ================= 调度看板 ================= */
@@ -313,8 +315,11 @@ export class DispatchService {
     if (!check) blockers.push('司机今日对该车的发车前安全检查未完成或未通过');
 
     const activeControls = await this.controls.find({ where: { status: 'active' } });
+    // 含「封闭」且未声明「未封闭」的管制才阻断派班
+    const isBlockingControl = (c: { reason: string }) =>
+      c.reason.includes('封闭') && !c.reason.includes('未封闭');
     const blockingControl = activeControls.find(c =>
-      c.reason.includes('封闭') && (!c.stationId || c.stationId === origin.id || c.stationId === dest.id));
+      isBlockingControl(c) && (!c.stationId || c.stationId === origin.id || c.stationId === dest.id));
     if (blockingControl) blockers.push(`道路管制：${blockingControl.segment} 道路封闭`);
 
     const [weatherRow] = await this.weatherRepo.find({ order: { id: 'DESC' }, take: 1 });
@@ -497,13 +502,21 @@ export class DispatchService {
     }
     await this.drivers.save(d);
 
-    // 车票核销
+    // 车票核销（误乘反方向、换乘方案仍在进行中的车票不在本班核销）
+    const activeTransferTickets = await this.transferSvc.activeTicketIdsOnTrip(trip.id);
     const onboard = await this.tickets.find({ where: { tripId, status: 'boarded' } });
-    for (const t of onboard) { t.status = 'used'; await this.tickets.save(t); }
+    let settled = 0;
+    for (const t of onboard) {
+      if (activeTransferTickets.has(t.id)) continue;
+      t.status = 'used';
+      await this.tickets.save(t);
+      settled += 1;
+    }
     const boardedEntries = await this.queue.find({ where: { tripId, status: 'boarded' } });
     // queue 已在检票时记录 waitSeconds
 
-    return { trip, vehicle: v, driver: d, settledTickets: onboard.length };
+    return { trip, vehicle: v, driver: d, settledTickets: settled,
+      transferHeld: onboard.length - settled };
   }
 
   /* ================= 车辆故障（在运） ================= */

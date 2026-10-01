@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import { api, fen, TICKET_TYPE, TICKET_STATUS } from '../api';
 import { useAction, useApi } from '../hooks';
+import { VisitorTransferCard } from '../components/Transfer';
 
 export default function VisitorPage() {
   const { data: routesData } = useApi<any[]>('/routes');
@@ -162,6 +163,9 @@ function TicketDetail({ detail, onRefund, onChanged }: { detail: any; onRefund: 
 
   return (
     <div>
+      {(detail.transfers || []).filter((p: any) => !['cancelled'].includes(p.status)).map((p: any) => (
+        <VisitorTransferCard key={p.id} plan={p} onChanged={onChanged} />
+      ))}
       <Descriptions column={3} bordered size="small">
         <Descriptions.Item label="票号">{ticket.code}</Descriptions.Item>
         <Descriptions.Item label="票种">{typeLabel}</Descriptions.Item>

@@ -5,11 +5,15 @@ import {
 } from '../entities';
 import { OpsService } from './ops.service';
 import { OpsController } from './ops.controller';
+import { TransferModule } from '../transfer/transfer.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([
-    QueueEntry, Ticket, Trip, Vehicle, Incident, Refund, Station,
-  ])],
+  imports: [
+    TypeOrmModule.forFeature([
+      QueueEntry, Ticket, Trip, Vehicle, Incident, Refund, Station,
+    ]),
+    TransferModule,
+  ],
   providers: [OpsService],
   controllers: [OpsController],
 })

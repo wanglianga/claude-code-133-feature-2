@@ -3,8 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
   RouteLine, Station, Vehicle, Driver, Weather, Ticket, QueueEntry,
-  RoadControl, Trip,
+  RoadControl, Trip, GeofenceEvent,
 } from './entities';
+import { TransferService } from './transfer/transfer.service';
 import { now, seqCode, ticketPrice } from './common';
 
 @Injectable()
@@ -19,6 +20,8 @@ export class SeedService implements OnApplicationBootstrap {
     @InjectRepository(QueueEntry) private readonly queue: Repository<QueueEntry>,
     @InjectRepository(RoadControl) private readonly controls: Repository<RoadControl>,
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
+    @InjectRepository(GeofenceEvent) private readonly geofence: Repository<GeofenceEvent>,
+    private readonly transferSvc: TransferService,
   ) {}
 
   async onApplicationBootstrap() {
@@ -215,7 +218,75 @@ export class SeedService implements OnApplicationBootstrap {
     t6.status = 'queued';
     await this.tickets.save(t6);
 
+    /* ---- 误乘反方向在途场景（环山线）----
+       林阿婆（无障碍优先票，东门→玻璃栈道，应乘上行）在东门被强制放行乘上
+       V03 下行班车（赵师傅驾驶，东门→南门→索道→玻璃栈道→山顶→百花园终到）。
+       车辆已驶过玻璃栈道到达山顶观景台，下一站百花园（终点站），
+       平台已生成换乘方案：百花园下车、工作人员接应、换乘上行 V05 计划班。 */
+    const connectTrip = await this.trips.save(this.trips.create({
+      code: seqCode('TR'),
+      routeId: loop.id, vehicleId: vehicles[4].id, driverId: drivers[2].id,
+      direction: 'forward', status: 'scheduled',
+      originStationId: loopStations[1].id, destStationId: loopStations[3].id,
+      departAt: null, seatsTotal: 20, seatsSold: 0, wheelchairHeld: 0,
+      boardedCount: 0, skippedStations: [],
+    }));
+    vehicles[4].currentStationId = loopStations[1].id;
+    vehicles[4].lat = loopStations[1].lat;
+    vehicles[4].lng = loopStations[1].lng;
+    await this.vehicles.save(vehicles[4]);
+
+    const wrongTrip = await this.trips.save(this.trips.create({
+      code: seqCode('TR'),
+      routeId: loop.id, vehicleId: vehicles[2].id, driverId: drivers[3].id,
+      direction: 'backward', status: 'running',
+      originStationId: loopStations[0].id, destStationId: loopStations[1].id,
+      departAt: new Date(Date.now() - 26 * 60000).toISOString(),
+      seatsTotal: 10, seatsSold: 2, wheelchairHeld: 1,
+      boardedCount: 1, skippedStations: [],
+    }));
+    vehicles[2].status = 'running';
+    vehicles[2].currentTripId = wrongTrip.id;
+    vehicles[2].currentStationId = loopStations[2].id;
+    vehicles[2].lat = loopStations[2].lat;
+    vehicles[2].lng = loopStations[2].lng;
+    await this.vehicles.save(vehicles[2]);
+    drivers[3].status = 'driving';
+    drivers[3].currentVehicleId = vehicles[2].id;
+    drivers[3].shiftStart = new Date(Date.now() - 26 * 60000).toISOString();
+    await this.drivers.save(drivers[3]);
+    await this.geofence.save(this.geofence.create({
+      vehicleId: vehicles[2].id, stationId: loopStations[2].id, kind: 'enter',
+      lat: loopStations[2].lat, lng: loopStations[2].lng, at: now(),
+    }));
+
+    const t7 = await mkTicket({
+      visitorName: '林阿婆（轮椅老人）', type: 'accessible_priority', partySize: 2,
+      hasElder: true, priority: true, needWheelchair: true,
+      destStationId: loopStations[3].id,
+      expectedDirection: 'forward',
+      plannedRoute: '东门枢纽 → 山顶观景台 → 玻璃栈道',
+      status: 'boarded', tripId: wrongTrip.id,
+      price: ticketPrice('accessible_priority', 2),
+    });
+    await this.queue.save(this.queue.create({
+      stationId: loopStations[0].id, ticketId: t7.id, partySize: 2,
+      priority: true, expectedDirection: 'forward',
+      status: 'boarded', enqueueAt: new Date(Date.now() - 30 * 60000).toISOString(),
+      boardAt: new Date(Date.now() - 26 * 60000).toISOString(),
+      tripId: wrongTrip.id, waitSeconds: 4 * 60,
+    }));
+
+    // 平台生成换乘方案（事件同步司机/下一站，方案待调度确认）
+    await this.transferSvc.createForWrongBoarding({
+      ticketId: t7.id,
+      wrongTripId: wrongTrip.id,
+      boardStationId: loopStations[0].id,
+      raisedByRole: 'staff',
+    });
+    void connectTrip;
+
     // eslint-disable-next-line no-console
-    console.log('[seed] 演示数据已写入：2 条线路 / 10 个站点 / 6 辆车 / 4 名司机 / 6 张票');
+    console.log('[seed] 演示数据已写入：2 条线路 / 10 个站点 / 6 辆车 / 4 名司机 / 7 张票（含 1 起误乘反方向换乘在途）');
   }
 }

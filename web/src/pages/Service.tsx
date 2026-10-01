@@ -2,8 +2,9 @@ import { useState } from 'react';
 import {
   Card, Table, Tag, Space, Button, Tabs, Badge, Modal, Input, message, Typography, Alert, Empty,
 } from 'antd';
-import { api, fen, TICKET_TYPE } from '../api';
+import { api, fen, TICKET_TYPE, TRANSFER_STATUS } from '../api';
 import { useApi } from '../hooks';
+import { PlanTimeline, PlanDescriptions, dirText } from '../components/Transfer';
 
 const FAULT_LABEL: Record<string, string> = {
   visitor: '游客自身', storm: '暴雨停运', vehicle: '车辆故障', schedule: '调度延误', other: '其他',
@@ -41,6 +42,16 @@ export default function ServicePage() {
       <Space direction="vertical" size={0}><span>{r.reason}</span><Tag>{FAULT_LABEL[r.faultTag]}</Tag></Space> },
     { title: '状态', dataIndex: 'status', width: 110,
       render: (s: string) => <Tag color={REFUND_STATUS[s]?.color}>{REFUND_STATUS[s]?.text}</Tag> },
+    {
+      title: '行程变化', key: 'trip-change', width: 130,
+      render: (_: any, r: any) => (r.transferPlans?.length ? (
+        <Space direction="vertical" size={0}>
+          <Tag color="magenta">误乘换乘 {r.transferPlans.length}</Tag>
+          <Button size="small" type="link" style={{ padding: 0 }}
+            onClick={() => journeyModal(r)}>查看完整行程</Button>
+        </Space>
+      ) : <span className="muted">—</span>),
+    },
     {
       title: mode === 'agent' ? '客服处理' : '客服主管裁决', key: 'op', width: 320,
       render: (_: any, r: any) => mode === 'agent' ? (
@@ -185,8 +196,59 @@ function supervisorModal(r: any, approve: boolean, refresh: () => void) {
   });
 }
 
-function timelineModal(r: any) {
+/** 客服处理退票时查看完整行程变化（误乘方案 + 事件时间线） */
+function journeyModal(r: any) {
+  const plans: any[] = r.transferPlans || [];
+  const incs: any[] = r.incidentTimeline || [];
   Modal.info({
+    title: `完整行程变化：${r.ticket?.visitorName}（${r.ticket?.code}）`,
+    width: 720,
+    content: (
+      <div className="timeline-box">
+        {plans.map(p => (
+          <div key={p.id} style={{ marginBottom: 16 }}>
+            <Space wrap style={{ marginBottom: 8 }}>
+              <b>换乘方案 {p.code}</b>
+              <Tag color={TRANSFER_STATUS[p.status]?.color}>{TRANSFER_STATUS[p.status]?.text}</Tag>
+              <span className="muted">误乘班 {p.wrongTrip?.code}（{dirText(p.wrongTrip?.direction)}）</span>
+              {p.extraWait && <Tag color="orange">额外等待 {p.actualWaitMinutes} 分钟</Tag>}
+            </Space>
+            <PlanDescriptions plan={p} />
+            {p.chosenOption && (
+              <Alert style={{ marginTop: 8 }} type="info" showIcon
+                message={`已执行方案：${p.chosenOption.title}`}
+                description={p.chosenOption.detail} />
+            )}
+            <div style={{ marginTop: 8 }}>
+              <b>方案处理记录：</b>
+              <PlanTimeline plan={p} />
+            </div>
+          </div>
+        ))}
+        <b>关联事件时间线：</b>
+        {(incs.length ? incs : []).map((inc, i) => (
+          <div key={i} style={{ marginBottom: 10 }}>
+            <Space wrap>
+              <Tag>{incidentType(inc.type)}</Tag>
+              <b>{inc.title}</b>
+              <Tag color={inc.status === 'closed' ? 'green' : inc.status === 'resolved' ? 'blue' : 'orange'}>
+                {inc.status}
+              </Tag>
+            </Space>
+            <div className="muted">{inc.detail}</div>
+            {(inc.timeline || []).map((t: any, j: number) => (
+              <div key={j} style={{ fontSize: 12, marginLeft: 8 }}>
+                {new Date(t.at).toLocaleString('zh-CN')} · {roleName(t.role)}：{t.text}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    ),
+  });
+}
+
+function timelineModal(r: any) {  Modal.info({
     title: `${r.code} 事件时间线`,
     width: 600,
     content: (

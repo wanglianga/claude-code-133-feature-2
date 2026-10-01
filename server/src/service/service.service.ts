@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Refund, Ticket, Incident, Trip } from '../entities';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransferService } from '../transfer/transfer.service';
 import { now } from '../common';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class ServiceService {
     @InjectRepository(Incident) private readonly incidents: Repository<Incident>,
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
     private readonly incidentSvc: IncidentsService,
+    private readonly transferSvc: TransferService,
   ) {}
 
   /** 客服工作台：待办退票 + 开放事件 */
@@ -26,7 +28,33 @@ export class ServiceService {
     ]);
     const ticketRows = await this.tickets.find();
     const tMap = new Map(ticketRows.map(t => [t.id, t]));
-    const withTicket = (r: Refund) => ({ ...r, ticket: tMap.get(r.ticketId) });
+    // 退票处理时可查看该票的完整行程变化（误乘换乘方案 + 关联事件时间线）
+    const [allPlans, allIncidents] = await Promise.all([
+      this.transferSvc.list(),
+      this.incidents.find({ order: { id: 'ASC' } }),
+    ]);
+    const transferByTicket = new Map<number, any[]>();
+    for (const p of allPlans) {
+      const arr = transferByTicket.get(p.ticketId) || [];
+      arr.push(p);
+      transferByTicket.set(p.ticketId, arr);
+    }
+    const timelineByTicket = new Map<number, Incident[]>();
+    for (const inc of allIncidents) {
+      if (!inc.ticketId) continue;
+      const arr = timelineByTicket.get(inc.ticketId) || [];
+      arr.push(inc);
+      timelineByTicket.set(inc.ticketId, arr);
+    }
+    const withTicket = (r: Refund) => {
+      const ticket = tMap.get(r.ticketId);
+      return {
+        ...r,
+        ticket,
+        transferPlans: ticket ? transferByTicket.get(ticket.id) || [] : [],
+        incidentTimeline: ticket ? timelineByTicket.get(ticket.id) || [] : [],
+      };
+    };
     return {
       pendingRefunds: pendingRefunds.map(withTicket),
       escalatedRefunds: escalated.map(withTicket),

@@ -4,16 +4,21 @@ import {
   Alert, Badge, Typography, message, Empty, Tooltip,
 } from 'antd';
 import {
-  CloudOutlined, SoundOutlined, ReloadOutlined, WarningOutlined,
+  CloudOutlined, SoundOutlined, ReloadOutlined, WarningOutlined, SwapOutlined,
 } from '@ant-design/icons';
-import { api, TICKET_TYPE, TRIP_STATUS, waitText } from '../api';
+import { api, TICKET_TYPE, TRIP_STATUS, TRANSFER_STATUS, waitText } from '../api';
 import { useApi } from '../hooks';
+import {
+  ConfirmPlanModal, StaffMeetModal, timelineModal, dirText,
+} from '../components/Transfer';
 
 export default function StaffPage() {
   const { data: overview } = useApi<any>('/overview');
   const [stationId, setStationId] = useState<number>(1);
   const [ticketCode, setTicketCode] = useState('');
   const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const [confirmPlan, setConfirmPlan] = useState<any>(null);
+  const [meetPlan, setMeetPlan] = useState<any>(null);
   const [tick, setTick] = useState(0);
   const boardPath = stationId ? `/stations/${stationId}/board` : null;
   const { data: board, loading } = useApi<any>(boardPath, [stationId, tick]);
@@ -54,6 +59,7 @@ export default function StaffPage() {
       render: (_: any, r: any) => (
         <Space wrap size={4}>
           <b>{r.partySize} 人</b>
+          {r.transferPlanId && <Tag color="magenta">误乘换乘交接·免排队</Tag>}
           {r.priority && <Tag color="purple">优先</Tag>}
           {r.ticket?.needWheelchair && <Tag color="geekblue">轮椅</Tag>}
           {r.ticket?.hasStroller && <Tag>婴儿车</Tag>}
@@ -181,6 +187,14 @@ export default function StaffPage() {
             <Alert type="info" showIcon message={`本站景点限流 ${board.flowLimitPerHour} 人/小时，注意控制放行节奏`} />
           )}
 
+          <TransferAlerts
+            transfers={board.transfers || []}
+            trips={board.trips || []}
+            onConfirm={setConfirmPlan}
+            onMeet={setMeetPlan}
+            onChanged={refresh}
+          />
+
           <Card title="游客扫码入队" extra={<span className="muted">仅本站票面始发站可入队，系统自动校验方向</span>}>
             <Space style={{ width: '100%' }}>
               <Input style={{ maxWidth: 320 }} placeholder="扫描/输入车票号，如 T20260925-001"
@@ -269,7 +283,100 @@ export default function StaffPage() {
 
       <BroadcastModal open={broadcastOpen} stationId={stationId}
         onClose={() => setBroadcastOpen(false)} onDone={() => { setBroadcastOpen(false); refresh(); }} />
+
+      {confirmPlan && (
+        <ConfirmPlanModal plan={confirmPlan} byRole="staff"
+          connectTrips={(board?.trips || []).filter((t: any) =>
+            ['boarding', 'running', 'scheduled'].includes(t.status)
+            && (t.direction === confirmPlan.neededDirection || t.direction === 'loop'))}
+          onDone={() => { setConfirmPlan(null); refresh(); }} />
+      )}
+      {meetPlan && <StaffMeetModal plan={meetPlan} onDone={() => { setMeetPlan(null); refresh(); }} />}
     </Space>
+  );
+}
+
+/** 下一站误乘接应提醒：不重新排队，直接交接换乘 */
+function TransferAlerts({ transfers, trips, onConfirm, onMeet, onChanged }: {
+  transfers: any[];
+  trips: any[];
+  onConfirm: (p: any) => void;
+  onMeet: (p: any) => void;
+  onChanged: () => void;
+}) {
+  if (!transfers.length) return null;
+  return (
+    <Card title={<Space><SwapOutlined style={{ color: '#d4380d' }} />误乘反方向 · 本站接应提醒
+      <Badge count={transfers.length} color="#cf1322" /></Space>}
+      extra={<span className="muted">游客由反方向班车送达本站，禁止要求重新排队，直接优先交接</span>}>
+      <Space direction="vertical" style={{ width: '100%' }} size={10}>
+        {transfers.map(p => {
+          const st = TRANSFER_STATUS[p.status];
+          return (
+            <Alert
+              key={p.id}
+              type={p.status === 'declined' ? 'error' : 'warning'}
+              showIcon
+              message={
+                <Space wrap>
+                  <b>{p.ticket?.visitorName}（{p.ticket?.partySize}人）</b>
+                  <Tag color="purple">误乘</Tag>
+                  <Tag color={st?.color}>{st?.text}</Tag>
+                  <span className="muted">{p.code} · 误乘班 {p.wrongTrip?.code}（{dirText(p.wrongTrip?.direction)}）</span>
+                  {p.ticket?.needWheelchair && <Tag color="geekblue">轮椅</Tag>}
+                  {p.driverAckAt
+                    ? <Tag color="green">司机已知悉</Tag>
+                    : <Tag color="orange">司机未确认</Tag>}
+                </Space>
+              }
+              description={
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  <div>
+                    应在本站下车换乘 <b>{dirText(p.neededDirection)}</b> 方向车前往
+                    <b> {p.destStationName}</b>；{p.chosenOption
+                      ? `已确认方案：${p.chosenOption.title}`
+                      : '方案待确认'}；预计额外等待约 {p.estimatedWaitMinutes} 分钟
+                    {p.extraWait && <Tag color="orange" style={{ marginLeft: 8 }}>已产生额外等待 {p.actualWaitMinutes} 分</Tag>}
+                  </div>
+                  {p.refund && (
+                    <div className="muted">关联退票单 {p.refund.code}
+                      （{p.refund.status === 'paid' ? '已退款' : '客服处理中'}）</div>
+                  )}
+                  <Space wrap>
+                    {['proposed', 'confirmed', 'declined'].includes(p.status)
+                      && p.chosenOption?.kind !== 'refund_guide' && (
+                      <Button size="small" type="primary" onClick={() => onConfirm(p)}>
+                        {p.status === 'proposed' ? '确认换乘方案'
+                          : p.status === 'declined' ? '游客改主意 · 重新安排换乘' : '调整方案'}
+                      </Button>
+                    )}
+                    {['proposed', 'confirmed'].includes(p.status)
+                      && !p.staffMetAt
+                      && ['confirmed', 'accepted'].includes(p.status)
+                      && p.chosenOption?.kind !== 'refund_guide' && (
+                      <Button size="small" type="primary" onClick={() => onMeet(p)}>
+                        车辆到站 · 已接到游客（免排队交接）
+                      </Button>
+                    )}
+                    {p.staffMetAt && <Tag color="green">本站已于 {new Date(p.staffMetAt).toLocaleTimeString('zh-CN')} 接应</Tag>}
+                    {!p.refund && ['proposed', 'confirmed', 'declined'].includes(p.status) && (
+                      <Button size="small" danger onClick={async () => {
+                        await api.post(`/transfer-plans/${p.id}/request-refund`, {
+                          reason: '下一站工作人员协助：游客误乘后要求退票',
+                        });
+                        message.success('已代为发起退票，客服可见完整行程变化');
+                        onChanged();
+                      }}>游客要求退票 · 代发起</Button>
+                    )}
+                    <Button size="small" type="link" onClick={() => timelineModal(p)}>方案时间线</Button>
+                  </Space>
+                </Space>
+              }
+            />
+          );
+        })}
+      </Space>
+    </Card>
   );
 }
 

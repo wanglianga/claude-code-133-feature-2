@@ -146,6 +146,7 @@ export class QueueEntry {
   @Column({ nullable: true }) boardAt: string | null;
   @Column({ nullable: true }) tripId: number | null;
   @Column('int', { default: 0 }) waitSeconds: number;
+  @Column({ nullable: true }) transferPlanId: number | null; // 误乘换乘重新入队时关联方案
 }
 
 /* ---------------- 事件中心（票 / 班车串联所有角色） ---------------- */
@@ -266,7 +267,63 @@ export class CharterOrder {
   @Column() createdAt: string;
 }
 
+/* ---------------- 误乘反方向 · 换乘方案 ---------------- */
+
+export interface TransferOption {
+  id: string;
+  kind: 'alight_transfer' | 'turnaround' | 'shuttle' | 'refund_guide';
+  title: string;
+  detail: string;
+  alightStationName: string;
+  connectDirection: string;        // 上行 / 下行 / 环线
+  connectTripCode?: string;
+  estimatedWaitMinutes: number;
+  extraFare: boolean;              // 平台承诺换乘不另收费
+  recommended: boolean;
+}
+
+@Entity('transfer_plans')
+export class TransferPlan {
+  @PrimaryGeneratedColumn() id: number;
+  @Column() code: string;            // HC20261001-001
+  @Index() @Column() ticketId: number;
+  @Column() incidentId: number;      // 串联误乘事件（时间线双向同步）
+  @Column() wrongTripId: number;     // 误乘上的反方向班次
+  @Column() boardStationId: number;  // 强制放行上车站
+  @Column({ nullable: true }) currentStationId: number | null;
+  @Column() alightStationId: number; // 建议下车站（车辆下一站）
+  @Column({ nullable: true }) transferStationId: number | null; // 实际换乘接应站
+  @Column() destStationId: number;   // 游客原目的地
+  @Column({ default: 'forward' }) neededDirection: 'forward' | 'backward' | 'loop';
+  @Column('simple-json') options: TransferOption[];
+  @Column({ default: '' }) chosenOptionId: string;
+  @Column({ default: '' }) ticketKindNote: string;  // 按票种的换乘权益说明
+  @Column({ default: 'proposed' })
+  status: 'proposed' | 'confirmed' | 'accepted' | 'declined'
+        | 'completed' | 'archived' | 'cancelled';
+  @Column({ default: false }) extraWait: boolean;       // 是否产生额外等待
+  @Column('int', { default: 0 }) estimatedWaitMinutes: number;
+  @Column('int', { default: 0 }) actualWaitMinutes: number;
+  @Column({ nullable: true }) connectTripId: number | null;
+  @Column({ nullable: true }) connectQueueId: number | null;
+  @Column({ nullable: true }) driverAckAt: string | null;      // 司机知悉
+  @Column({ nullable: true }) staffNotifiedAt: string | null;  // 下一站首次提醒
+  @Column({ nullable: true }) staffRemindedAt: string | null;  // 方案确认后下一站再次同步
+  @Column({ nullable: true }) staffMetAt: string | null;       // 下一站接应登记
+  @Column({ nullable: true }) visitorSyncedAt: string | null;  // 行程变化同步游客端
+  @Column({ nullable: true }) visitorDecidedAt: string | null;
+  @Column({ nullable: true }) completedAt: string | null;
+  @Column({ nullable: true }) archivedAt: string | null;
+  @Column({ default: '' }) declineReason: string;
+  @Column({ default: '' }) staffNote: string;
+  @Column({ nullable: true }) refundId: number | null;
+  @Column('simple-json', { nullable: true })
+  timeline: { at: string; role: string; text: string }[] | null;
+  @Column() createdAt: string;
+}
+
 export const ALL_ENTITIES = [
   RouteLine, Station, Vehicle, Driver, SafetyCheck, Trip, Ticket, QueueEntry,
   Incident, Refund, Broadcast, Weather, RoadControl, GeofenceEvent, CharterOrder,
+  TransferPlan,
 ];

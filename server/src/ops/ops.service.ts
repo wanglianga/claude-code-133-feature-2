@@ -4,6 +4,7 @@ import { In, Repository } from 'typeorm';
 import {
   QueueEntry, Ticket, Trip, Vehicle, Incident, Refund, Station,
 } from '../entities';
+import { TransferService } from '../transfer/transfer.service';
 
 @Injectable()
 export class OpsService {
@@ -15,6 +16,7 @@ export class OpsService {
     @InjectRepository(Incident) private readonly incidents: Repository<Incident>,
     @InjectRepository(Refund) private readonly refunds: Repository<Refund>,
     @InjectRepository(Station) private readonly stations: Repository<Station>,
+    private readonly transferSvc: TransferService,
   ) {}
 
   /** 运营复盘：站点等待 / 车辆利用率 / 投诉原因 / 退票成本 */
@@ -130,6 +132,7 @@ export class OpsService {
       openIncidents: incs.filter(i => ['open', 'processing', 'escalated'].includes(i.status)).length,
     };
 
-    return { kpi, stationWait, vehicleUtil, complaintReasons, refundByFault: byFault };
+    return { kpi, stationWait, vehicleUtil, complaintReasons, refundByFault: byFault,
+      transfers: await this.transferSvc.stats() };
   }
 }

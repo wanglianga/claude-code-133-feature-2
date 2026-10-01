@@ -4,16 +4,20 @@ import {
   Input, InputNumber, message, Tabs, Badge, Popconfirm, Typography,
 } from 'antd';
 import {
-  CloudServerOutlined, ThunderboltOutlined, WarningOutlined,
+  CloudServerOutlined, ThunderboltOutlined, WarningOutlined, SwapOutlined,
 } from '@ant-design/icons';
-import { api, TRIP_STATUS } from '../api';
+import { api, TRIP_STATUS, TRANSFER_STATUS } from '../api';
 import { useApi } from '../hooks';
+import { ConfirmPlanModal, timelineModal, dirText } from '../components/Transfer';
 
 export default function DispatchPage() {
   const [tick, setTick] = useState(0);
   const { data: dash, loading } = useApi<any>(`/dispatch/dashboard?t=${tick}`, [tick]);
   const { data: geo } = useApi<any[]>('/geofence-events');
+  const { data: transferPlans } = useApi<any[]>(`/transfer-plans?t=${tick}`, [tick]);
   const refresh = () => setTick(t => t + 1);
+  const activeTransfers = (transferPlans || []).filter((p: any) =>
+    !['archived', 'cancelled'].includes(p.status));
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -65,6 +69,8 @@ export default function DispatchPage() {
         items={[
           { key: 'board', label: '站点与车辆', children: <BoardTab dash={dash} loading={loading} geo={geo} refresh={refresh} /> },
           { key: 'dispatch', label: '派班发车', children: <DispatchTab dash={dash} refresh={refresh} /> },
+          { key: 'transfer', label: <Badge count={activeTransfers.length} size="small">误乘换乘</Badge>,
+            children: <TransferTab plans={transferPlans || []} dash={dash} refresh={refresh} /> },
           { key: 'charter', label: '团队包车', children: <CharterTab dash={dash} refresh={refresh} /> },
           { key: 'weather', label: '天气与道路管制', children: <WeatherTab dash={dash} refresh={refresh} /> },
         ]}
@@ -442,6 +448,82 @@ function AddControl({ stations, onDone }: { stations: any[]; onDone: () => void 
         setSegment(''); setReason(''); onDone();
       }}>发布管制</Button>
     </Space>
+  );
+}
+
+function TransferTab({ plans, dash, refresh }: { plans: any[]; dash: any; refresh: () => void }) {
+  const [confirmFor, setConfirmFor] = useState<any>(null);
+  const active = plans.filter(p => !['archived', 'cancelled'].includes(p.status));
+  const connectTrips = (dash?.trips || []).filter((t: any) =>
+    ['boarding', 'running', 'scheduled'].includes(t.status));
+
+  return (
+    <Card title={<Space><SwapOutlined />误乘反方向换乘方案（按票种 · 当前位置 · 剩余路线生成，司机与下一站自动提醒）</Space>}
+      extra={<span className="muted">待确认 {active.filter(p => p.status === 'proposed').length} ·
+        接应中 {active.filter(p => ['confirmed', 'accepted'].includes(p.status)).length} ·
+        已完成 {plans.filter(p => p.status === 'completed').length}</span>}>
+      <Table rowKey="id" size="small" pagination={{ pageSize: 8 }} dataSource={active}
+        locale={{ emptyText: '当前没有进行中的误乘换乘方案' }}
+        columns={[
+          { title: '方案', dataIndex: 'code', width: 140 },
+          {
+            title: '游客 / 票', key: 't',
+            render: (_: any, p: any) => (
+              <Space direction="vertical" size={0}>
+                <b>{p.ticket?.visitorName}（{p.ticket?.partySize}人）</b>
+                <span className="muted">{p.ticket?.code}</span>
+              </Space>
+            ),
+          },
+          { title: '误乘班', key: 'w', render: (_: any, p: any) =>
+            <Space size={4}>{p.wrongTrip?.code}<Tag>{dirText(p.wrongTrip?.direction)}</Tag></Space> },
+          { title: '下车站', dataIndex: 'alightStationName' },
+          { title: '应乘方向', key: 'd', render: (_: any, p: any) => dirText(p.neededDirection) },
+          { title: '目的地', dataIndex: 'destStationName' },
+          {
+            title: '衔接/等待', key: 'c',
+            render: (_: any, p: any) => (
+              <Space direction="vertical" size={0}>
+                <span>{p.connectTrip?.code || '下一班对向车'}</span>
+                <span className="muted">约 {p.estimatedWaitMinutes} 分
+                  {p.extraWait && <Tag color="orange" style={{ marginLeft: 4 }}>实际 {p.actualWaitMinutes} 分</Tag>}
+                </span>
+              </Space>
+            ),
+          },
+          {
+            title: '各方状态', key: 'sync',
+            render: (_: any, p: any) => (
+              <Space wrap size={4}>
+                <Tag color={p.driverAckAt ? 'green' : 'orange'}>{p.driverAckAt ? '司机知悉' : '司机待确认'}</Tag>
+                <Tag color={p.staffNotifiedAt ? 'blue' : 'default'}>下一站已提醒</Tag>
+                <Tag color={p.staffRemindedAt ? 'blue' : 'default'}>{p.staffRemindedAt ? '确认后再同步' : '待确认'}</Tag>
+                <Tag color={p.staffMetAt ? 'green' : 'default'}>{p.staffMetAt ? '已接应' : '未接应'}</Tag>
+                <Tag color={p.visitorSyncedAt ? 'cyan' : 'default'}>{p.visitorSyncedAt ? '已同步游客' : '未同步'}</Tag>
+              </Space>
+            ),
+          },
+          { title: '状态', key: 's', render: (_: any, p: any) =>
+            <Tag color={TRANSFER_STATUS[p.status]?.color}>{TRANSFER_STATUS[p.status]?.text}</Tag> },
+          {
+            title: '操作', key: 'op', width: 230,
+            render: (_: any, p: any) => (
+              <Space wrap>
+                {['proposed', 'confirmed', 'declined'].includes(p.status) && (
+                  <Button size="small" type="primary" onClick={() => setConfirmFor(p)}>
+                    {p.status === 'proposed' ? '确认方案' : p.status === 'declined' ? '改回换乘' : '调整方案'}
+                  </Button>
+                )}
+                <Button size="small" type="link" onClick={() => timelineModal(p)}>时间线</Button>
+              </Space>
+            ),
+          },
+        ]} />
+      {confirmFor && (
+        <ConfirmPlanModal plan={confirmFor} byRole="dispatch" connectTrips={connectTrips}
+          onDone={() => { setConfirmFor(null); refresh(); }} />
+      )}
+    </Card>
   );
 }
 

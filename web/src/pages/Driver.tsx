@@ -3,9 +3,10 @@ import {
   Card, Select, Button, Tag, Space, Checkbox, Alert, Table, Statistic, Row, Col,
   Modal, Input, message, Descriptions, Empty, Progress,
 } from 'antd';
-import { SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
+import { SafetyCertificateOutlined, WarningOutlined, SwapOutlined } from '@ant-design/icons';
 import { api, TRIP_STATUS } from '../api';
 import { useApi } from '../hooks';
+import { timelineModal, dirText } from '../components/Transfer';
 
 const CHECK_ITEMS = [
   { key: 'brake', label: '刹车系统' },
@@ -24,15 +25,20 @@ export default function DriverPage() {
   const [vehicleId, setVehicleId] = useState<number>(2);
   const [tick, setTick] = useState(0);
   const { data: board, reload: reloadBoard } = useApi<any>(`/dispatch/dashboard?t=${tick}`, [tick]);
+  const { data: transferPlans, reload: reloadPlans } = useApi<any[]>(`/transfer-plans?t=${tick}`, [tick]);
 
   const drivers = driversRaw || [];
   const driver = drivers.find(d => d.id === driverId);
   const vehicle = (vehicles || []).find((v: any) => v.id === vehicleId);
   const myTrips = (board?.trips || []).filter((t: any) => t.driverName === driver?.name);
+  const myTripIds = new Set(myTrips.map((t: any) => t.id));
+  const myTransferAlerts = (transferPlans || []).filter(
+    (p: any) => myTripIds.has(p.wrongTrip?.id) && !['archived', 'cancelled'].includes(p.status),
+  );
   const activeTrip = myTrips.find((t: any) => ['boarding', 'running', 'delayed'].includes(t.status))
     || myTrips.find((t: any) => t.status === 'scheduled');
 
-  const refresh = async () => { setTick(t => t + 1); reloadDrivers(); reloadTrips(); reloadBoard(); };
+  const refresh = async () => { setTick(t => t + 1); reloadDrivers(); reloadTrips(); reloadBoard(); reloadPlans(); };
 
   const dutyAction = async (action: string, label: string) => {
     try { await api.post(`/drivers/${driverId}/duty`, { action }); message.success(label); refresh(); }
@@ -111,6 +117,49 @@ export default function DriverPage() {
           },
         })}>车辆故障上报</Button>
       </Space>
+
+      {myTransferAlerts.length > 0 && (
+        <Card title={<Space><SwapOutlined style={{ color: '#cf1322' }} />误乘反方向游客提醒（到站请协助下车交接，勿让游客重新排队）</Space>}>
+          <Space direction="vertical" style={{ width: '100%' }}>
+            {myTransferAlerts.map((p: any) => (
+              <Alert
+                key={p.id}
+                type={p.driverAckAt ? 'info' : 'error'}
+                showIcon
+                message={
+                  <Space wrap>
+                    <b>{p.ticket?.visitorName}（{p.ticket?.partySize} 人{p.ticket?.needWheelchair ? ' · 轮椅' : ''}）在您的 {p.wrongTrip?.code} 上</b>
+                    <Tag color="orange">误乘反方向</Tag>
+                    {p.driverAckAt
+                      ? <Tag color="green">您已知悉</Tag>
+                      : <Tag color="red">待您知悉</Tag>}
+                  </Space>
+                }
+                description={
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    <div>
+                      该游客应乘{dirText(p.neededDirection)}方向前往「{p.destStationName}」，
+                      请在到达 <b>{p.alightStationName}</b> 时提醒其下车，
+                      {p.staffMetAt ? '本站工作人员已接应' : '本站工作人员将在站台接应'}。
+                      {p.chosenOption ? ` 已确认方案：${p.chosenOption.title}` : ' 换乘方案待确认，请提醒游客留意手机端通知。'}
+                    </div>
+                    <Space wrap>
+                      {!p.driverAckAt && (
+                        <Button size="small" type="primary" onClick={async () => {
+                          await api.post(`/transfer-plans/${p.id}/driver-ack`, {});
+                          message.success('已知悉，将按方案交接');
+                          refresh();
+                        }}>我已知悉 · 到站交接</Button>
+                      )}
+                      <Button size="small" type="link" onClick={() => timelineModal(p)}>查看方案时间线</Button>
+                    </Space>
+                  </Space>
+                }
+              />
+            ))}
+          </Space>
+        </Card>
+      )}
 
       <Card title={<Space><SafetyCertificateOutlined />发车前安全检查（六项不合格则车辆转维保，不能派班）</Space>}>
         <SafetyCheck driverId={driverId} vehicleId={vehicleId} onDone={refresh} />

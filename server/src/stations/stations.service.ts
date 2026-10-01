@@ -6,6 +6,7 @@ import {
   Broadcast, RoadControl, Incident,
 } from '../entities';
 import { IncidentsService } from '../incidents/incidents.service';
+import { TransferService } from '../transfer/transfer.service';
 import { now, waitSeconds } from '../common';
 
 const LONG_QUEUE_RATIO = 1.2; // 排队人数超站台容量 1.2 倍判定过长
@@ -24,6 +25,7 @@ export class StationsService {
     @InjectRepository(RoadControl) private readonly controls: Repository<RoadControl>,
     @InjectRepository(Incident) private readonly incidents: Repository<Incident>,
     private readonly incidentSvc: IncidentsService,
+    private readonly transferSvc: TransferService,
   ) {}
 
   /* ---------------- 线路 / 站点 / 天气 ---------------- */
@@ -128,6 +130,10 @@ export class StationsService {
       where: { stationId, status: 'boarded' },
     });
 
+    // 误乘反方向：下一站接应提醒（方案生成时首次提醒，确认后再次同步）
+    const transferAlerts = (await this.transferSvc.list({ stationId }))
+      .filter(p => !['archived', 'cancelled'].includes(p.status));
+
     return {
       station,
       route,
@@ -141,6 +147,7 @@ export class StationsService {
       broadcasts,
       checkedToday,
       flowLimitPerHour: station.flowLimitPerHour,
+      transfers: transferAlerts,
     };
   }
 
@@ -228,6 +235,7 @@ export class StationsService {
     const dirMismatch = trip.direction !== 'loop'
       && ticket.expectedDirection !== 'loop'
       && trip.direction !== ticket.expectedDirection;
+    let createdTransferId: number | null = null;
     if (dirMismatch && !opts.force) {
       await this.incidentSvc.create({
         type: 'wrong_direction',
@@ -269,17 +277,31 @@ export class StationsService {
     await this.tickets.save(ticket);
 
     if (dirMismatch && opts.force) {
-      await this.incidentSvc.create({
+      const inc = await this.incidentSvc.create({
         type: 'wrong_direction',
         severity: 'critical',
         title: `${ticket.visitorName} 确认乘上反方向班车 ${trip.code}`,
-        detail: '站务已二次确认并强制放行，需通知司机/下一站协助换乘返回',
+        detail: '站务已二次确认并强制放行，平台按票种与剩余路线生成换乘方案，通知司机/下一站协助换乘返回',
         ticketId: ticket.id, tripId: trip.id, stationId: entry.stationId,
         raisedByRole: 'staff', ownerRole: 'dispatch',
-        firstNote: '站务强制放行反方向乘车，调度安排返程衔接',
+        firstNote: '站务强制放行反方向乘车，平台开始生成换乘衔接方案',
       });
+      // 生成换乘方案：同步提醒司机与下一站，游客不再被要求重新排队
+      const plan = await this.transferSvc.createForWrongBoarding({
+        ticketId: ticket.id,
+        wrongTripId: trip.id,
+        boardStationId: entry.stationId,
+        raisedByRole: 'staff',
+        incidentId: inc.id,
+      });
+      createdTransferId = plan.id;
     }
-    return { ok: true, entry, trip, waitSeconds: entry.waitSeconds };
+    // 误乘游客经下一站优先交接队列换乘上车 → 方案自动进入「换乘完成」
+    if (entry.transferPlanId) {
+      await this.transferSvc.onTransferBoarded(entry.transferPlanId, trip.id);
+    }
+    return { ok: true, entry, trip, waitSeconds: entry.waitSeconds,
+      transferPlanId: createdTransferId || entry.transferPlanId || null };
   }
 
   /** 一键叫下一位：优先组优先，同组按 FIFO */

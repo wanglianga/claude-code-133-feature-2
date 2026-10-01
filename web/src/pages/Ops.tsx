@@ -110,6 +110,33 @@ export default function OpsPage() {
         </Col>
       </Row>
 
+      <Card title="误乘反方向换乘治理（平台是否接住了误乘游客）">
+        {(() => {
+          const t = r.transfers;
+          if (!t || t.total === 0) return <span className="muted">本期无误乘换乘记录</span>;
+          const items: [string, string | number, string?][] = [
+            ['误乘方案总数', t.total],
+            ['进行中', t.active, '#d46b08'],
+            ['游客接受并完成换乘', t.completed, '#389e0d'],
+            ['游客拒绝/转退票', t.declined, '#cf1322'],
+            ['已归档闭环', t.archived],
+            ['关联退票单数', t.refundLinked],
+            ['产生额外等待人次', t.extraWaitCount, '#d46b08'],
+            ['平均实际额外等待', `${t.avgActualWaitMinutes} 分钟`],
+          ];
+          return (
+            <Space wrap size={[24, 16]}>
+              {items.map(([label, val, color]) => (
+                <div key={label as string} style={{ minWidth: 150 }}>
+                  <div className="muted" style={{ fontSize: 12 }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: color }}>{val}</div>
+                </div>
+              ))}
+            </Space>
+          );
+        })()}
+      </Card>
+
       <Card title="站点明细">
         <Table rowKey="stationId" size="small" pagination={false} dataSource={r.stationWait}
           columns={[
